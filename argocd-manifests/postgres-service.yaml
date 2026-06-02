@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cga-db
+spec:
+  selector:
+    app: cga-db
+  ports:
+    - port: 5432
+      targetPort: 5432
+  type: ClusterIP
