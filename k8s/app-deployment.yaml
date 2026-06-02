@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cga-app-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cga-app
+  template:
+    metadata:
+      labels:
+        app: cga-app
+    spec:
+      containers:
+        - name: cga-app
+          image: cga-app:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: "Production"
+
+            - name: ConnectionStrings__DefaultConnection
+              value: "Host=cga-db;Port=5432;Database=cga_db;Username=postgres;Password=postgres"
