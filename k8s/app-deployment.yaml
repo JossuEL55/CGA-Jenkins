@@ -14,13 +14,41 @@ spec:
     spec:
       containers:
         - name: cga-app
-          image: cga-app:latest
-          imagePullPolicy: Never
+          image: ghcr.io/jossuel55/cga-jenkins/cga-app:sha-86788cd
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: cga-app-config
           env:
-            - name: ASPNETCORE_ENVIRONMENT
-              value: "Production"
-
-            - name: ConnectionStrings__DefaultConnection
-              value: "Host=cga-db;Port=5432;Database=cga_db;Username=postgres;Password=postgres"
+            - name: Database__Username
+              valueFrom:
+                secretKeyRef:
+                  name: cga-postgres-secret
+                  key: username
+            - name: Database__Password
+              valueFrom:
+                secretKeyRef:
+                  name: cga-postgres-secret
+                  key: password
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
