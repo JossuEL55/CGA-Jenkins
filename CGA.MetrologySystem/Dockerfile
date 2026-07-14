@@ -5,7 +5,7 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
 USER $APP_UID
 WORKDIR /app
 EXPOSE 8080
-EXPOSE 8081
+ENV ASPNETCORE_HTTP_PORTS=8080
 
 
 # Esta fase se usa para compilar el proyecto de servicio
@@ -13,6 +13,9 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
 COPY ["CGA.MetrologySystem/CGA.MetrologySystem.csproj", "CGA.MetrologySystem/"]
+COPY ["CGA.MetrologySystem.Application/CGA.MetrologySystem.Application.csproj", "CGA.MetrologySystem.Application/"]
+COPY ["CGA.MetrologySystem.Domain/CGA.MetrologySystem.Domain.csproj", "CGA.MetrologySystem.Domain/"]
+COPY ["CGA.MetrologySystem.Infrastructure/CGA.MetrologySystem.Infrastructure.csproj", "CGA.MetrologySystem.Infrastructure/"]
 RUN dotnet restore "./CGA.MetrologySystem/CGA.MetrologySystem.csproj"
 COPY . .
 WORKDIR "/src/CGA.MetrologySystem"
