@@ -1,0 +1,207 @@
+name: Container
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Trusted Git ref to build
+        required: true
+        default: master
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+  security-events: write
+  attestations: write
+  id-token: write
+  pull-requests: write
+
+jobs:
+  build-scan-publish:
+    name: Build, scan, publish and propose GitOps update
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'master')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tested commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || inputs.source_ref || github.sha }}
+          fetch-depth: 0
+
+      - name: Define immutable source and image names
+        id: source
+        shell: bash
+        run: |
+          source_sha="$(git rev-parse HEAD)"
+          source_branch="${{ github.event.workflow_run.head_branch || inputs.source_ref }}"
+          image_name="ghcr.io/${GITHUB_REPOSITORY,,}/cga-app"
+          short_sha="${source_sha::7}"
+          if [[ "$source_branch" == "master" ]]; then
+            is_default_branch=true
+          else
+            is_default_branch=false
+          fi
+          echo "SOURCE_SHA=$source_sha" >> "$GITHUB_ENV"
+          echo "SOURCE_BRANCH=$source_branch" >> "$GITHUB_ENV"
+          echo "SHORT_SHA=$short_sha" >> "$GITHUB_ENV"
+          echo "IMAGE_NAME=$image_name" >> "$GITHUB_ENV"
+          echo "IS_DEFAULT_BRANCH=$is_default_branch" >> "$GITHUB_ENV"
+          echo "image_name=$image_name" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Generate OCI metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.source.outputs.image_name }}
+          tags: |
+            type=raw,value=sha-${{ env.SOURCE_SHA }}
+            type=raw,value=sha-${{ env.SHORT_SHA }}
+            type=raw,value=latest,enable=${{ env.IS_DEFAULT_BRANCH }}
+          labels: |
+            org.opencontainers.image.title=CGA Metrology System
+            org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Build local image for security gate
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: CGA.MetrologySystem/Dockerfile
+          load: true
+          push: false
+          tags: cga-app:security-scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan image and generate SARIF
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: cga-app:security-scan
+          format: sarif
+          output: trivy-image.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '0'
+
+      - name: Upload Trivy SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-container
+
+      - name: Generate readable Trivy report
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: cga-app:security-scan
+          format: table
+          output: trivy-image.txt
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '0'
+
+      - name: Upload Trivy evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: trivy-image-${{ env.SHORT_SHA }}
+          path: |
+            trivy-image.sarif
+            trivy-image.txt
+          if-no-files-found: error
+
+      - name: Block fixable critical vulnerabilities
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: cga-app:security-scan
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push trusted image
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: CGA.MetrologySystem/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Attest image build provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Export immutable image metadata
+        shell: bash
+        run: |
+          mkdir -p container-metadata
+          jq -n \
+            --arg image "$IMAGE_NAME" \
+            --arg digest "${{ steps.push.outputs.digest }}" \
+            --arg commit "$SOURCE_SHA" \
+            --arg workflow_run "$GITHUB_RUN_ID" \
+            '{image: $image, digest: $digest, commit: $commit, workflow_run: $workflow_run}' \
+            > container-metadata/image.json
+          printf '%s@%s\n' "$IMAGE_NAME" "${{ steps.push.outputs.digest }}" \
+            > container-metadata/image-reference.txt
+          cat container-metadata/image.json
+
+      - name: Upload image metadata
+        uses: actions/upload-artifact@v7
+        with:
+          name: container-metadata-${{ env.SHORT_SHA }}
+          path: container-metadata/**
+          if-no-files-found: error
+
+      - name: Create GitOps update pull request
+        if: env.IS_DEFAULT_BRANCH == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
+        shell: bash
+        run: |
+          branch="gitops/deploy-${SHORT_SHA}-${GITHUB_RUN_ID}"
+          git fetch origin master
+          git switch --create "$branch" origin/master
+          sed -i "s|^          image: .*|          image: ${IMAGE_NAME}@${IMAGE_DIGEST}|" \
+            argocd-manifests/app-deployment.yaml
+
+          if git diff --quiet; then
+            echo "The active manifest already references this immutable image."
+            exit 0
+          fi
+
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add argocd-manifests/app-deployment.yaml
+          git commit -m "chore(gitops): deploy cga-app ${SHORT_SHA} [skip ci]"
+          git push origin "$branch"
+          gh pr create \
+            --base master \
+            --head "$branch" \
+            --title "chore(gitops): deploy cga-app ${SHORT_SHA}" \
+            --body "Deploys commit \`${SOURCE_SHA}\` using immutable image \`${IMAGE_NAME}@${IMAGE_DIGEST}\`. Merge only after reviewing the Trivy and attestation evidence from workflow run \`${GITHUB_RUN_ID}\`."

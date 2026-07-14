@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  SOLUTION: CGA.MetrologySystem.slnx
+  WEB_PROJECT: CGA.MetrologySystem/CGA.MetrologySystem.csproj
+
+jobs:
+  build-test-publish:
+    name: Build, test and publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'global.json') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore "$SOLUTION"
+
+      - name: Build
+        run: dotnet build "$SOLUTION" --configuration Release --no-restore
+
+      - name: Test with TRX and Cobertura coverage
+        run: >-
+          dotnet test "$SOLUTION"
+          --configuration Release
+          --no-build
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory "${{ runner.temp }}/test-results"
+          --collect "XPlat Code Coverage"
+
+      - name: Upload test and coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ github.sha }}
+          path: ${{ runner.temp }}/test-results/**
+          if-no-files-found: warn
+
+      - name: Publish web application
+        run: >-
+          dotnet publish "$WEB_PROJECT"
+          --configuration Release
+          --no-build
+          --output "${{ runner.temp }}/publish"
+          -p:UseAppHost=false
+
+      - name: Package and checksum artifact
+        id: artifact
+        shell: bash
+        run: |
+          short_sha="${GITHUB_SHA::7}"
+          artifact_name="cga-metrology-system-${short_sha}"
+          cd "${{ runner.temp }}/publish"
+          zip -r "${{ runner.temp }}/${artifact_name}.zip" .
+          cd "${{ runner.temp }}"
+          sha256sum "${artifact_name}.zip" > "${artifact_name}.zip.sha256"
+          echo "name=${artifact_name}" >> "$GITHUB_OUTPUT"
+          cat "${artifact_name}.zip.sha256"
+
+      - name: Upload published application
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ runner.temp }}/${{ steps.artifact.outputs.name }}.zip
+          if-no-files-found: error
+
+      - name: Upload SHA-256 evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.artifact.outputs.name }}-sha256
+          path: ${{ runner.temp }}/${{ steps.artifact.outputs.name }}.zip.sha256
+          if-no-files-found: error
+
+  dependency-analysis:
+    name: NuGet vulnerability analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore "$SOLUTION"
+
+      - name: List vulnerable direct and transitive dependencies
+        shell: bash
+        run: |
+          set +e
+          dotnet list "$SOLUTION" package --vulnerable --include-transitive 2>&1 | tee dependency-vulnerabilities.txt
+          command_status=${PIPESTATUS[0]}
+          if [[ $command_status -ne 0 ]]; then
+            echo "::warning::The NuGet audit command returned ${command_status}; inspect the evidence artifact."
+          fi
+          exit 0
+
+      - name: Upload dependency evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dependency-analysis-${{ github.sha }}
+          path: dependency-vulnerabilities.txt
+          if-no-files-found: error
+
+  dependency-review:
+    name: Dependency Review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: high

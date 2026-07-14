@@ -1,0 +1,85 @@
+name: Kubernetes Validation
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - k8s/**
+      - argocd-manifests/**
+      - argocd/**
+      - .github/workflows/kubernetes-validation.yml
+  pull_request:
+    branches: [master]
+    paths:
+      - k8s/**
+      - argocd-manifests/**
+      - argocd/**
+      - .github/workflows/kubernetes-validation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  validate:
+    name: Syntax, schemas and policy scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Parse every YAML document
+        shell: bash
+        run: |
+          mapfile -d '' yaml_files < <(find k8s argocd-manifests argocd -type f \( -name '*.yml' -o -name '*.yaml' \) -print0)
+          ruby -ryaml -e 'ARGV.each { |path| YAML.load_stream(File.read(path)); puts "Parsed #{path}" }' "${yaml_files[@]}"
+
+      - name: Install verified kubeconform
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=0.7.0
+          archive=kubeconform-linux-amd64.tar.gz
+          curl --fail --silent --show-error --location \
+            --output "$archive" \
+            "https://github.com/yannh/kubeconform/releases/download/v${version}/${archive}"
+          curl --fail --silent --show-error --location \
+            --output CHECKSUMS \
+            "https://github.com/yannh/kubeconform/releases/download/v${version}/CHECKSUMS"
+          grep -E "^[0-9a-f]{64}  ${archive}$" CHECKSUMS \
+            | sha256sum --check --strict -
+          tar -xzf "$archive" kubeconform
+          chmod +x kubeconform
+          ./kubeconform -v
+
+      - name: Validate Kubernetes and Argo CD schemas
+        shell: bash
+        run: >-
+          ./kubeconform
+          -strict
+          -summary
+          -ignore-missing-schemas
+          -output json
+          k8s argocd-manifests argocd
+          | tee kubeconform-report.json
+
+      - name: Scan Kubernetes configuration with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          format: json
+          output: trivy-config.json
+          severity: MEDIUM,HIGH,CRITICAL
+          exit-code: '0'
+
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: kubernetes-validation-${{ github.sha }}
+          path: |
+            kubeconform-report.json
+            trivy-config.json
+          if-no-files-found: warn

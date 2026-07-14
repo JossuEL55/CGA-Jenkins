@@ -14,14 +14,40 @@ spec:
     spec:
       containers:
         - name: cga-db
-          image: cga-db:latest
-          imagePullPolicy: Never
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5432
           env:
             - name: POSTGRES_DB
-              value: "cga_db"
+              valueFrom:
+                configMapKeyRef:
+                  name: cga-app-config
+                  key: Database__Name
             - name: POSTGRES_USER
-              value: "postgres"
+              valueFrom:
+                secretKeyRef:
+                  name: cga-postgres-secret
+                  key: username
             - name: POSTGRES_PASSWORD
-              value: "postgres"
+              valueFrom:
+                secretKeyRef:
+                  name: cga-postgres-secret
+                  key: password
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

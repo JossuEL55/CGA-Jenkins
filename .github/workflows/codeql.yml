@@ -1,0 +1,46 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  analyze:
+    name: Analyze C#
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: csharp
+          queries: security-extended
+
+      - name: Restore
+        run: dotnet restore CGA.MetrologySystem.slnx
+
+      - name: Build for CodeQL tracing
+        run: dotnet build CGA.MetrologySystem.slnx --configuration Release --no-restore
+
+      - name: Analyze and upload SARIF
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:csharp

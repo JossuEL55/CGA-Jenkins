@@ -361,3 +361,8 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# Local DevSecOps reports and published output
+artifacts/
+zap-reports/
+TestResults/

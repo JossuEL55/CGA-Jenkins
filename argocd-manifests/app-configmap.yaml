@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cga-app-config
+data:
+  ASPNETCORE_ENVIRONMENT: Production
+  Database__Host: cga-db
+  Database__Port: "5432"
+  Database__Name: cga_db
