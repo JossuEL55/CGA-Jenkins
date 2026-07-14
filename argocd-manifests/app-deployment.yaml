@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: cga-app
-          image: ghcr.io/jossuel55/cga-jenkins/cga-app@sha256:040f9df4f3dbc9e721e88e42cb859243cef102b0a783a3da6d6c6049975b2eec
+          image: ghcr.io/jossuel55/cga-jenkins/cga-app@sha256:e98d34338c1b000cd25271a9ed3e77edf5eea3b75aaf7c3c8996ada9f850f9b2
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
