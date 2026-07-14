@@ -38,16 +38,20 @@ jobs:
       - name: Install verified kubeconform
         shell: bash
         run: |
+          set -euo pipefail
           version=0.7.0
+          archive=kubeconform-linux-amd64.tar.gz
           curl --fail --silent --show-error --location \
-            --output kubeconform.tar.gz \
-            "https://github.com/yannh/kubeconform/releases/download/v${version}/kubeconform-linux-amd64.tar.gz"
+            --output "$archive" \
+            "https://github.com/yannh/kubeconform/releases/download/v${version}/${archive}"
           curl --fail --silent --show-error --location \
             --output CHECKSUMS \
             "https://github.com/yannh/kubeconform/releases/download/v${version}/CHECKSUMS"
-          grep ' kubeconform-linux-amd64.tar.gz$' CHECKSUMS | sha256sum --check --strict
-          tar -xzf kubeconform.tar.gz kubeconform
+          grep -E "^[0-9a-f]{64}  ${archive}$" CHECKSUMS \
+            | sha256sum --check --strict -
+          tar -xzf "$archive" kubeconform
           chmod +x kubeconform
+          ./kubeconform -v
 
       - name: Validate Kubernetes and Argo CD schemas
         shell: bash
