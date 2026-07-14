@@ -4,7 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       target_url:
-        description: URL reachable from Docker on the Windows self-hosted Minikube machine
+        description: URL accesible desde Windows, por ejemplo http://127.0.0.1:54098
+        required: true
+        type: string
+      zap_target_url:
+        description: URL accesible desde Docker, por ejemplo http://host.docker.internal:54098
         required: true
         type: string
 
@@ -16,17 +20,30 @@ jobs:
     name: OWASP ZAP Baseline
     runs-on: [self-hosted, windows]
     timeout-minutes: 30
+
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Verify target availability
+      - name: Verify target availability from Windows
         shell: pwsh
         run: ./scripts/smoke-test.ps1 -TargetUrl '${{ inputs.target_url }}'
 
+      - name: Verify target availability from Docker
+        shell: pwsh
+        run: |
+          docker run --rm curlimages/curl:latest `
+            --fail `
+            --silent `
+            --show-error `
+            '${{ inputs.zap_target_url }}/health'
+
       - name: Run observational ZAP Baseline
         shell: pwsh
-        run: ./scripts/run-zap.ps1 -TargetUrl '${{ inputs.target_url }}' -ReportDirectory '${{ runner.temp }}/zap-reports'
+        run: |
+          ./scripts/run-zap.ps1 `
+            -TargetUrl '${{ inputs.zap_target_url }}' `
+            -ReportDirectory '${{ runner.temp }}/zap-reports'
 
       - name: Upload ZAP reports
         if: always()
